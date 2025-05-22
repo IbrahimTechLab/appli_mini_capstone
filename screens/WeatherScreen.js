@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, Button, StyleSheet, ActivityIndicator, ScrollView, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_KEY = '2a1e4ae9dbf6db0e5ac01d71e9783582';
+const API_KEY = 'ta_clé_api_openweathermap'; // Remplacez par votre clé API OpenWeatherMap
 const STORAGE_KEY = '@weather_data';
 
 const WeatherScreen = () => {
