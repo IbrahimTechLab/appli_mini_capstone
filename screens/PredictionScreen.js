@@ -29,9 +29,9 @@ const PredictionScreen = ({ navigation }) => {
   const [soilTypes, setSoilTypes] = useState({});
   const [loading, setLoading] = useState(false);
 
-  // Récupère les types de sol depuis le backend
+  // Charger les types de sol depuis le backend
   useEffect(() => {
-    fetch("http://192.168.13.53:5000/api/soil-types")
+    fetch("https://9a21-162-43-193-233.ngrok-free.app/api/soil-types")
       .then(response => response.json())
       .then(data => setSoilTypes(data))
       .catch(error => {
@@ -40,47 +40,55 @@ const PredictionScreen = ({ navigation }) => {
       });
   }, []);
 
+  const validateFields = () => {
+    const fields = [ph, temperature, humidity, organicCarbon, sodium, potassium, nitrogen, phosphorus];
+    if (fields.some(val => isNaN(val) || val.trim() === '')) {
+      alert("Tous les champs doivent être remplis avec des valeurs numériques valides.");
+      return false;
+    }
+    if (soilType === null) {
+      alert("Veuillez sélectionner un type de sol.");
+      return false;
+    }
+    return true;
+  };
+
   const handlePredictPress = async () => {
-    if (
-      ph && temperature && humidity && organicCarbon &&
-      sodium && potassium && nitrogen && phosphorus && soilType !== null
-    ) {
-      setLoading(true);
+    if (!validateFields()) return;
 
-      try {
-        const response = await fetch("http://192.168.13.53:5000/api/predict-disease", {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            soil_pH: ph,
-            temperature,
-            humidity,
-            organic_carbon: organicCarbon,
-            sodium,
-            potassium,
-            nitrogen,
-            phosphorus,
-            soil_type: soilType
-          }),
+    setLoading(true);
+    try {
+      const response = await fetch("https://9a21-162-43-193-233.ngrok-free.app/api/predict-disease", {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          soil_pH: parseFloat(ph),
+          temperature: parseFloat(temperature),
+          humidity: parseFloat(humidity),
+          organic_carbon: parseFloat(organicCarbon),
+          sodium: parseFloat(sodium),
+          potassium: parseFloat(potassium),
+          nitrogen: parseFloat(nitrogen),
+          phosphorus: parseFloat(phosphorus),
+          soil_type: soilType,
+        }),
+      });
+
+      const data = await response.json();
+      setLoading(false);
+
+      if (response.ok) {
+        // ✅ Correction ici : navigation vers l'écran de résultat avec son nom entre guillemets
+        navigation.navigate('ResultScreen', {
+          maladie: data.maladie,
+          prediction: data.prediction,
         });
-
-        const data = await response.json();
-        setLoading(false);
-
-        if (response.ok) {
-          navigation.navigate('ResultScreen', {
-            maladie: data.maladie,
-            prediction: data.prediction,
-          });
-        } else {
-          alert(`Erreur : ${data.error}`);
-        }
-      } catch (error) {
-        setLoading(false);
-        alert('Erreur réseau. Vérifiez la connexion au serveur.');
+      } else {
+        alert(`Erreur : ${data.error}`);
       }
-    } else {
-      alert('Veuillez remplir tous les champs.');
+    } catch (error) {
+      setLoading(false);
+      alert('Erreur réseau. Vérifiez la connexion au serveur.');
     }
   };
 
@@ -95,14 +103,29 @@ const PredictionScreen = ({ navigation }) => {
           <Text style={styles.title}>🔬 Prédiction des maladies du sol</Text>
 
           {/* Champs de saisie */}
-          <TextInput style={styles.input} placeholder="pH du sol" keyboardType="numeric" value={ph} onChangeText={setPh} />
+          <TextInput
+  style={styles.input}
+  placeholder="pH du sol (0 - 14)"
+  keyboardType="numeric"
+  value={ph}
+  onChangeText={val => {
+    const num = parseFloat(val);
+    if (isNaN(num)) {
+      setPh(''); // permet vider le champ
+    } else if (num >= 0 && num <= 14) {
+      setPh(val);
+    }
+    // sinon ne fait rien, ignore la valeur hors limite
+  }}
+/>
+
           <TextInput style={styles.input} placeholder="Température (°C)" keyboardType="numeric" value={temperature} onChangeText={setTemperature} />
           <TextInput style={styles.input} placeholder="Humidité (%)" keyboardType="numeric" value={humidity} onChangeText={setHumidity} />
           <TextInput style={styles.input} placeholder="Matière organique (%)" keyboardType="numeric" value={organicCarbon} onChangeText={setOrganicCarbon} />
-          <TextInput style={styles.input} placeholder="Sodium (ppm)" keyboardType="numeric" value={sodium} onChangeText={setSodium} />
-          <TextInput style={styles.input} placeholder="Potassium (ppm)" keyboardType="numeric" value={potassium} onChangeText={setPotassium} />
-          <TextInput style={styles.input} placeholder="Azote (ppm)" keyboardType="numeric" value={nitrogen} onChangeText={setNitrogen} />
-          <TextInput style={styles.input} placeholder="Phosphore (ppm)" keyboardType="numeric" value={phosphorus} onChangeText={setPhosphorus} />
+          <TextInput style={styles.input} placeholder="Sodium (mg/kg)" keyboardType="numeric" value={sodium} onChangeText={setSodium} />
+          <TextInput style={styles.input} placeholder="Potassium (mg/kg)" keyboardType="numeric" value={potassium} onChangeText={setPotassium} />
+          <TextInput style={styles.input} placeholder="Azote (mg/kg)" keyboardType="numeric" value={nitrogen} onChangeText={setNitrogen} />
+          <TextInput style={styles.input} placeholder="Phosphore (mg/kg)" keyboardType="numeric" value={phosphorus} onChangeText={setPhosphorus} />
 
           <Text style={styles.label}>Type de sol</Text>
           <View style={styles.pickerContainer}>
@@ -178,6 +201,11 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
     marginTop: 10,
+    shadowColor: '#000', // ✅ Ombre ajoutée
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4.65,
+    elevation: 8, // ✅ Ombre Android
   },
   buttonText: {
     color: '#fff',

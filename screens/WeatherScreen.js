@@ -1,13 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TextInput, Button, StyleSheet, ActivityIndicator, ScrollView } from 'react-native';
+import { View, Text, TextInput, Button, StyleSheet, ActivityIndicator, ScrollView, Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const API_KEY = '2a1e4ae9dbf6db0e5ac01d71e9783582';
+const STORAGE_KEY = '@weather_data';
 
 const WeatherScreen = () => {
   const [city, setCity] = useState('Niamey');
   const [weather, setWeather] = useState(null);
   const [forecast, setForecast] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [consecutiveDryDays, setConsecutiveDryDays] = useState(0);
 
   const getEmoji = (condition) => {
     const map = {
@@ -39,8 +43,77 @@ const WeatherScreen = () => {
     Fog: "🌫️ Visibilité réduite, planifiez les activités tôt.",
   };
 
+  // Alertes spécifiques basées sur les données météo
+  const checkAlerts = (currentWeather, forecastData) => {
+    let alerts = [];
+
+    // 1. Gel : température ≤ 0°C
+    if (currentWeather.main.temp <= 0) {
+      alerts.push({ type: 'Gel', message: '⚠️ Risque de gel : protégez vos jeunes plants.' });
+    }
+
+    // 2. Vent violent : vitesse du vent > 10 m/s (~36 km/h)
+    if (currentWeather.wind.speed > 10) {
+      alerts.push({ type: 'Vent violent', message: '⚠️ Vent fort prévu, sécurisez vos cultures fragiles.' });
+    }
+
+    // 3. Fortes pluies : vérifier prévisions > 10 mm/h
+    const heavyRainForecast = forecastData.some(day => {
+      // rain volume peut être absent, on vérifie "rain" et "3h"
+      return day.rain && day.rain['3h'] && day.rain['3h'] > 10;
+    });
+    if (heavyRainForecast) {
+      alerts.push({ type: 'Fortes pluies', message: '⚠️ Pluies intenses attendues, préparez le drainage.' });
+    }
+
+    // 4. Sécheresse : calcul des jours consécutifs sans pluie > 3 jours
+    let dryDays = 0;
+    for (let i = 0; i < forecastData.length; i++) {
+      const rainVol = forecastData[i].rain && forecastData[i].rain['3h'] ? forecastData[i].rain['3h'] : 0;
+      if (rainVol === 0) {
+        dryDays++;
+      } else {
+        break; // pluie détectée, on stoppe le compteur
+      }
+    }
+    setConsecutiveDryDays(dryDays);
+    if (dryDays >= 3) {
+      alerts.push({ type: 'Sécheresse', message: `⚠️ ${dryDays} jours consécutifs sans pluie, arrosage conseillé.` });
+    }
+
+    // Affichage simple des alertes avec Alert de React Native
+    if (alerts.length > 0) {
+      // On crée un message concaténé
+      const alertMessages = alerts.map(a => a.message).join('\n');
+      Alert.alert('Alertes météo agricoles', alertMessages);
+    }
+  };
+
   const getAdvice = (condition) => {
     return adviceDict[condition] || "🌾 Conditions normales, surveillez régulièrement.";
+  };
+
+  const saveWeatherToStorage = async (weatherData, forecastData, cityName) => {
+    try {
+      const data = { weather: weatherData, forecast: forecastData, city: cityName };
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch (e) {
+      console.warn('Erreur sauvegarde météo:', e);
+    }
+  };
+
+  const loadWeatherFromStorage = async () => {
+    try {
+      const jsonValue = await AsyncStorage.getItem(STORAGE_KEY);
+      if (jsonValue != null) {
+        const data = JSON.parse(jsonValue);
+        setWeather(data.weather);
+        setForecast(data.forecast);
+        setCity(data.city);
+      }
+    } catch (e) {
+      console.warn('Erreur chargement météo:', e);
+    }
   };
 
   const fetchWeather = async () => {
@@ -48,34 +121,48 @@ const WeatherScreen = () => {
     if (!trimmedCity) return;
 
     setLoading(true);
+    setError(null);
+
     try {
       const resCurrent = await fetch(`https://api.openweathermap.org/data/2.5/weather?q=${trimmedCity}&appid=${API_KEY}&units=metric&lang=fr`);
       const dataCurrent = await resCurrent.json();
-      setWeather(dataCurrent.cod === 200 ? dataCurrent : null);
+
+      if (dataCurrent.cod !== 200) {
+        setError(dataCurrent.message || "Erreur inconnue");
+        setWeather(null);
+        setForecast([]);
+        setLoading(false);
+        return;
+      }
+      setWeather(dataCurrent);
 
       const resForecast = await fetch(`https://api.openweathermap.org/data/2.5/forecast?q=${trimmedCity}&appid=${API_KEY}&units=metric&lang=fr`);
       const dataForecast = await resForecast.json();
+
       if (dataForecast.cod === "200") {
-        const daily = dataForecast.list.filter((item, index) => index % 8 === 0);
+        // On récupère un forecast toutes les 8 mesures (~24h)
+        const daily = dataForecast.list.filter((_, index) => index % 8 === 0);
         setForecast(daily);
+        saveWeatherToStorage(dataCurrent, daily, trimmedCity);
+
+        // On vérifie les alertes météo agricoles
+        checkAlerts(dataCurrent, daily);
       } else {
         setForecast([]);
       }
-
-    } catch (error) {
-      console.error(error);
-      setWeather(null);
-      setForecast([]);
+    } catch (e) {
+      setError("Impossible de récupérer la météo. Vérifiez votre connexion.");
+      loadWeatherFromStorage();
     }
     setLoading(false);
   };
 
   useEffect(() => {
-    fetchWeather();
+    loadWeatherFromStorage().then(fetchWeather);
   }, []);
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>☀️ Météo Agricole</Text>
 
       <TextInput
@@ -83,10 +170,13 @@ const WeatherScreen = () => {
         placeholder="Entrer une ville"
         value={city}
         onChangeText={setCity}
+        placeholderTextColor="#888"
       />
-      <Button title="Rechercher" onPress={fetchWeather} />
+      <Button title="Rechercher" onPress={fetchWeather} disabled={!city.trim()} />
 
-      {loading ? (
+      {error ? (
+        <Text style={{ marginTop: 20, color: 'red' }}>❌ {error}</Text>
+      ) : loading ? (
         <ActivityIndicator size="large" color="#f4a261" style={{ marginTop: 20 }} />
       ) : weather ? (
         <>
@@ -97,9 +187,13 @@ const WeatherScreen = () => {
             <Text style={styles.details}>💧 Humidité : {weather.main.humidity}%</Text>
             <Text style={styles.details}>🌬️ Vent : {weather.wind.speed} m/s</Text>
             <Text style={styles.advice}>{getAdvice(weather.weather[0].main)}</Text>
+            {/* Afficher les jours sans pluie */}
+            <Text style={[styles.advice, { marginTop: 10, fontWeight: 'bold' }]}>
+              🌵 {consecutiveDryDays} jour(s) consécutif(s) sans pluie.
+            </Text>
           </View>
 
-          <Text style={styles.subtitle}>📅 Prévisions (7 jours)</Text>
+          <Text style={styles.subtitle}>🗓️ Prévisions (5 jours)</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
             {forecast.map((day, index) => (
               <View key={index} style={styles.forecastCard}>
@@ -116,108 +210,107 @@ const WeatherScreen = () => {
           </ScrollView>
         </>
       ) : (
-        <Text style={{ marginTop: 20, color: 'red' }}>❌ Ville introuvable !</Text>
+        <Text style={{ marginTop: 20 }}>Aucune donnée météo disponible.</Text>
       )}
     </ScrollView>
   );
 };
 
-export default WeatherScreen;
-
 const styles = StyleSheet.create({
   container: {
     padding: 20,
-    backgroundColor: '#fffdf2',
-    alignItems: 'center',
+    backgroundColor: '#fff8e1',
+    flexGrow: 1,
   },
   title: {
     fontSize: 26,
     fontWeight: 'bold',
-    color: '#f4a261',
-    marginBottom: 15,
+    color: '#e76f51',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#e76f51',
+    borderRadius: 8,
+    padding: 10,
+    fontSize: 18,
+    marginBottom: 10,
+    color: '#264653',
+  },
+  weatherBox: {
+    backgroundColor: '#f4a261',
+    borderRadius: 12,
+    padding: 15,
+    marginTop: 20,
+    alignItems: 'center',
+  },
+  city: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  condition: {
+    fontSize: 18,
+    marginTop: 5,
+    color: '#fff',
+  },
+  temp: {
+    fontSize: 36,
+    fontWeight: 'bold',
+    marginTop: 10,
+    color: '#fff',
+  },
+  details: {
+    fontSize: 16,
+    marginTop: 5,
+    color: '#fff',
+  },
+  advice: {
+    marginTop: 15,
+    fontSize: 16,
+    fontStyle: 'italic',
+    color: '#264653',
     textAlign: 'center',
   },
   subtitle: {
     fontSize: 20,
-    marginTop: 25,
+    fontWeight: '600',
+    marginTop: 30,
     color: '#2a9d8f',
-    fontWeight: '600',
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 12,
-    padding: 10,
-    marginBottom: 10,
-    width: '100%',
-    backgroundColor: '#fff',
-  },
-  weatherBox: {
-    marginTop: 20,
-    backgroundColor: '#e9f5f2',
-    borderRadius: 15,
-    padding: 20,
-    width: '100%',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowOffset: { width: 2, height: 4 },
-    shadowRadius: 5,
-  },
-  city: {
-    fontSize: 22,
-    fontWeight: '600',
-    color: '#264653',
-  },
-  condition: {
-    fontSize: 18,
-    marginVertical: 5,
-    color: '#e76f51',
-  },
-  temp: {
-    fontSize: 18,
-    color: '#000',
-  },
-  details: {
-    fontSize: 16,
-    color: '#333',
-  },
-  advice: {
-    marginTop: 5,
-    fontStyle: 'italic',
-    color: '#6a994e',
-    textAlign: 'center',
   },
   forecastCard: {
-    backgroundColor: '#f4f9f4',
-    padding: 15,
-    marginHorizontal: 8,
-    borderRadius: 15,
-    width: 200,
+    backgroundColor: '#e9c46a',
+    borderRadius: 12,
+    padding: 12,
+    marginRight: 12,
+    width: 130,
     alignItems: 'center',
-    borderColor: '#ddd',
-    borderWidth: 1,
   },
   cardDate: {
-    fontWeight: 'bold',
+    fontSize: 16,
+    fontWeight: '600',
     color: '#264653',
-    marginBottom: 5,
   },
   cardCondition: {
     fontSize: 14,
-    color: '#e76f51',
+    marginTop: 6,
+    color: '#264653',
     textAlign: 'center',
   },
   cardTemp: {
-    fontSize: 16,
+    fontSize: 28,
     fontWeight: 'bold',
-    marginTop: 4,
+    marginTop: 8,
+    color: '#e76f51',
   },
   cardAdvice: {
-    marginTop: 5,
-    fontSize: 12,
+    marginTop: 8,
+    fontSize: 13,
     fontStyle: 'italic',
-    color: '#6a994e',
+    color: '#264653',
     textAlign: 'center',
   },
 });
+
+export default WeatherScreen;
